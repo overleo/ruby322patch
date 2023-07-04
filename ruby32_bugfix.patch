@@ -1,0 +1,98 @@
+From f99af439805fe51b38aa1cf79f9c657f857510f4 Mon Sep 17 00:00:00 2001
+From: Nobuyoshi Nakada <nobu@ruby-lang.org>
+Date: Wed, 5 Apr 2023 23:48:50 +0900
+Subject: [PATCH] [Bug#19161] Detect thread local storage specifier
+
+Checking by `__STDC_VERSION__` is unreliable because old gcc 4.8
+supports `-std=gnu11` option but does not implement `_Thread_local`.
+Check the implementation directly instead.
+---
+ configure.ac                                  | 23 +++++++++++++------
+ .../thread/instrumentation/instrumentation.c  |  9 ++------
+ thread_pthread.h                              |  9 --------
+ 3 files changed, 18 insertions(+), 23 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index a0fadaa856..4bc9b60159 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -385,13 +385,6 @@ AS_IF([test "$GCC" = yes], [
+     AS_IF([test "$gcc_major" -lt 4], [
+         AC_MSG_ERROR([too old GCC: $gcc_major.$gcc_minor])
+     ])
+-
+-    AC_CACHE_CHECK([if thread-local storage is supported], [rb_cv_tls_supported],
+-        [AC_LINK_IFELSE([AC_LANG_PROGRAM([[int __thread conftest;]])],
+-            [rb_cv_tls_supported=yes],
+-            [rb_cv_tls_supported=no])])
+-    AS_IF([test x"$rb_cv_tls_supported" != xyes],
+-        [AC_DEFINE(RB_THREAD_LOCAL_SPECIFIER_IS_UNSUPPORTED)])
+ ], [
+     linker_flag=
+ ])
+@@ -2750,6 +2743,22 @@ AS_IF([test "$THREAD_MODEL" = pthread], [
+ 		AC_DEFINE_UNQUOTED(SET_ANOTHER_THREAD_NAME(thid,name), $set_another_thread_name)
+ 	    ])
+     ])
++
++    AC_CACHE_CHECK([for thread-local storage sepcifier], [rb_cv_tls_specifier],
++        rb_cv_tls_specifier=none
++        RUBY_WERROR_FLAG([
++            for attr in \
++                _Thread_local \
++                __thread \
++                ; do
++                AC_LINK_IFELSE([AC_LANG_PROGRAM([[$attr int conftest;]])],
++                    [rb_cv_tls_specifier=$attr; break])
++            done
++        ])
++    )
++    AS_IF([test x"${rb_cv_tls_specifier}" != xnone],
++        [AC_DEFINE_UNQUOTED(RB_THREAD_LOCAL_SPECIFIER, ${rb_cv_tls_specifier})]
++    )
+ ])
+ 
+ AS_IF([test x"$ac_cv_header_ucontext_h" = xno], [
+diff --git a/ext/-test-/thread/instrumentation/instrumentation.c b/ext/-test-/thread/instrumentation/instrumentation.c
+index d2a2c2740b..edb8738a29 100644
+--- a/ext/-test-/thread/instrumentation/instrumentation.c
++++ b/ext/-test-/thread/instrumentation/instrumentation.c
+@@ -8,13 +8,8 @@ static rb_atomic_t resumed_count = 0;
+ static rb_atomic_t suspended_count = 0;
+ static rb_atomic_t exited_count = 0;
+ 
+-#if __STDC_VERSION__ >= 201112
+-  #define RB_THREAD_LOCAL_SPECIFIER _Thread_local
+-#elif defined(__GNUC__) && !defined(RB_THREAD_LOCAL_SPECIFIER_IS_UNSUPPORTED)
+-  /* note that ICC (linux) and Clang are covered by __GNUC__ */
+-  #define RB_THREAD_LOCAL_SPECIFIER __thread
+-#else
+-  #define RB_THREAD_LOCAL_SPECIFIER
++#ifndef RB_THREAD_LOCAL_SPECIFIER
++#  define RB_THREAD_LOCAL_SPECIFIER
+ #endif
+ 
+ static RB_THREAD_LOCAL_SPECIFIER unsigned int local_ready_count = 0;
+diff --git a/thread_pthread.h b/thread_pthread.h
+index 40d7a13aa0..bf97c7a0ee 100644
+--- a/thread_pthread.h
++++ b/thread_pthread.h
+@@ -90,15 +90,6 @@ struct rb_thread_sched {
+     int wait_yield;
+ };
+ 
+-#ifndef RB_THREAD_LOCAL_SPECIFIER_IS_UNSUPPORTED
+-# if __STDC_VERSION__ >= 201112
+-#   define RB_THREAD_LOCAL_SPECIFIER _Thread_local
+-# elif defined(__GNUC__)
+-  /* note that ICC (linux) and Clang are covered by __GNUC__ */
+-#   define RB_THREAD_LOCAL_SPECIFIER __thread
+-# endif
+-#endif
+-
+ RUBY_SYMBOL_EXPORT_BEGIN
+ #ifdef RB_THREAD_LOCAL_SPECIFIER
+   # ifdef __APPLE__
+-- 
+2.34.1
+
